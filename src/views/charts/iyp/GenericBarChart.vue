@@ -23,6 +23,10 @@ export default {
       type: Object,
       default: () => ({}),
     },
+    config: {
+      type: Object,
+      default: () => ({}),
+    },
   },
   data() {
     return {
@@ -39,42 +43,74 @@ export default {
   },
   methods: {
     renderChart() {
-      const formattedData = this.formatChartData(this.localChartData)
-      const groupedData = this.groupTopThreeAndExceptAsOthers(formattedData)
 
-      const data = [
-        {
-          x: groupedData.labels,
-          y: groupedData.data,
-          type: 'bar',
-        },
-      ]
+      var data = []
 
-      // ReactiveChart component will take care of width and height
-      // const layout = {
-      //   height: 400,
-      //   width: 400,
-      //   ...this.chartLayout,
-      // }
+      if( this.config.groupKey ){
+
+        // find all different values for the groupping field
+        var group_values = []
+        this.localChartData.forEach( item => {
+          if(!group_values.includes(item.get(this.config.groupKey))) group_values.push(item.get(this.config.groupKey));
+        })
+
+        console.log( group_values)
+
+        group_values.forEach( group => {
+
+          const filtData = this.localChartData.filter((item) => item.get(this.config.groupKey) == group);
+
+          const formattedData = this.formatChartData(filtData)
+          const groupedData = this.groupTopThreeAndExceptAsOthers(formattedData)
+
+          data.push(
+            {
+              name: group,
+              x: groupedData.labels,
+              y: groupedData.data,
+              type: 'bar',
+            }
+          )
+
+        })
+
+      }
+      else{
+        const formattedData = this.formatChartData(this.localChartData)
+        const groupedData = this.groupTopThreeAndExceptAsOthers(formattedData)
+
+        data.push(
+          {
+            x: groupedData.labels,
+            y: groupedData.data,
+            type: 'bar',
+          }
+        )
+      }
 
       const layout = {
         ...this.chartLayout,
       }
 
-      this.actualChartData = data
       this.actualChartLayout = layout
+      this.actualChartData = data
     },
     formatChartData(arrayOfObjects) {
       if (!arrayOfObjects || arrayOfObjects.length === 0) {
         return []
       }
       const map = {}
+      let prefix = this.config.xlabel_prefix ? this.config.xlabel_prefix : ''
       arrayOfObjects.forEach(item => {
-        item.tags.forEach(tag => {
-          if (!map[tag]) {
-            map[tag] = 1
+        let keys = item.get(this.config.key)
+        if( !Array.isArray(keys) ) keys = [keys]
+
+        keys.forEach(  key => {
+          let value = this.config.value? item.get(this.config.value): 1
+          if (!map[prefix+String(key)]) {
+            map[prefix+String(key)] = value
           } else {
-            map[tag]++
+            map[prefix+String(key)] += value
           }
         })
       })

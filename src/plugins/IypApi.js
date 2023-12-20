@@ -5,7 +5,7 @@ const IypApi = {
     let driver
 
     let init = async () => {
-      await connect('neo4j', 'iyp.iijlab.net', '7687')
+      await connect('neo4j+s', 'iyp-bolt.iijlab.net', '443')
     }
 
     let connect = async (protocol, host, port) => {
@@ -85,14 +85,34 @@ const IypApi = {
     }
 
     // Return as an Object
-    async function runManyInOneSessionAndReturnAnObject(queries, options = { defaultAccessMode: neo4j.session.READ }) {
+    function runManyInParallel(queries, params, options = { defaultAccessMode: neo4j.session.READ }) {
+      const tx = getSession(options).beginTransaction()
+
+      let response = []
+      queries.forEach( q => {
+        try {
+          let res = tx.run(q.query, params)
+          response.push(res)
+        } catch (e) {
+          console.error(e)
+        }
+      })
+
+      //tx.close()
+
+      return response
+    }
+
+
+    // Return as an Object
+    async function runManyInOneSessionAndReturnAnObject(queries, params, options = { defaultAccessMode: neo4j.session.READ }) {
       let session = await getSession(options)
       let transaction = await session.beginTransaction()
 
       let response = []
       queries.forEach(async q => {
         try {
-          let res = await transaction.run(q.cypherQuery, q.params)
+          let res = await transaction.run(q.query, params)
           response.push(res)
         } catch (e) {
           console.error(e)
@@ -225,6 +245,7 @@ const IypApi = {
       getSession,
       run,
       runManyInOneSession,
+      runManyInParallel,
       runManyInOneSessionAndReturnAnObject,
       runMany,
       runManyAndGetFormattedResponse,

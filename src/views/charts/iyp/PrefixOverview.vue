@@ -1,6 +1,6 @@
 <template>
   <div class="IYP_chart">
-    <div v-if="loadingStatus" class="IYP_loading-spinner">
+    <div v-if="loading > 3" class="IYP_loading-spinner">
       <q-spinner color="secondary" size="3em" />
     </div>
     <div class="q-pl-sm q-mt-lg q-mb-lg">
@@ -8,38 +8,47 @@
       <div class="q-pl-md">
         <div class="row q-gutter-md q-mt-md justify-center">
           <div class="col-8">
-            <div class="row q-gutter-md">
+            <div class="row justify-evenly">
               <div class="col-12 col-md-auto">
-                <h3>Prefix Info</h3>
-                <div>
-                  <p>Prefix: {{ firstPart.prefix }}</p>
-                  <p v-if="firstPart.description">Desc: {{ firstPart.description }}</p>
-                  <p>Originating ASN: {{ firstPart.asn }}</p>
-                  <p>Originating AS Name: {{ firstPart.name }}</p>
-                  <p v-if="firstPart.cc">Country of origin: {{ firstPart.cc }}</p>
+                <h3>Summary</h3>
+                <div v-if="queries[0].data.length > 0" class="q-ml-sm">
+                  <p v-if="queries[0].data[0].get('country')">Registered in <router-link :to="{ name: 'iyp_country', params: {cc:queries[0].data[0].get('cc') } }">{{ queries[0].data[0].get('country') }}</router-link> ({{ queries[0].data[0].get('rir').toUpperCase() }})</p>
+                  <div v-if="queries[0].data[0].get('asn')[0][0]">
+                    <p>Originated by:</p>
+                      <div v-for="item in queries[0].data[0].get('asn')" :key='item[0]' target="_blank">
+                        <router-link :to="{ name:'iyp_asn', params:{ asn:item[0] } }">
+                        AS{{ item[0] }} {{ item[1] }}
+                        </router-link>
+                      </div>
+                  </div>
+                  <div v-else>
+                    <p>Prefix Not Announced on BGP</p>
+                  </div>
                 </div>
               </div>
               <div class="col-12 col-md-auto">
-                <h3>Top 5 Domains</h3>
-                <div class="column">
-                  <a :href="handleDomainName(item.domainName)" v-for="item in secondPart" target="_blank" rel="noreferrer">{{
-                    handleDomainName(item.domainName)
-                  }}</a>
+                <h3>Popular Domains</h3>
+                <div  v-if="queries[1].data.length > 0" class="q-ml-sm column">
+                  <router-link :to="{ name: 'iyp_domainname', params: {domain:item.get('domain')}}" v-for="item in queries[1].data" :key="item.get('domain')">
+                    {{ item.get('domain') }}
+                  </router-link>
                 </div>
               </div>
               <div class="col-12 col-md-2">
-                <h3>Reference</h3>
-                <div class="column">
-                  <a :href="handleReference(key)" v-for="(value, key) in references" target="_blank" rel="noreferrer">{{
-                    handleReference(key)
+                <h3>External Links</h3>
+                <div  class="q-ml-sm column">
+                  <a :href="handleReference(key)" v-for="(value, key) in references" :key="value" target="_blank" rel="noreferrer">{{
+                    key
                   }}</a>
                 </div>
               </div>
             </div>
             <div class="row">
-              <div class="q-mt-md">
+              <div v-if="queries[0].data.length > 0" class="q-mt-md">
                 <h3>Tags</h3>
-                <q-chip v-for="tag in firstPart.tags" dense size="md" color="gray" text-color="black"> {{ tag }}</q-chip>
+                <router-link v-for="tag in queries[0].data[0].get('tags')" :key="tag" :to="{ name: 'iyp_tag', params: {tag: tag}}">
+                  <q-chip dense size="md" color="info" text-color="white">{{ tag }}</q-chip>
+                </router-link>
               </div>
             </div>
 
@@ -59,9 +68,9 @@
 import { QChip } from 'quasar'
 
 const references = {
-  bgp: 'https://bgp.he.net/net',
-  bgpTools: 'https://bgp.tools/prefix',
-  ripeStat: 'https://stat.ripe.net/app/launchpad',
+  'bgp.he.net': 'https://bgp.he.net/net',
+  'bgp.tools': 'https://bgp.tools/prefix',
+  'stat.ripe.net': 'https://stat.ripe.net/app/launchpad',
 }
 
 export default {
@@ -82,76 +91,69 @@ export default {
       required: false,
       default: false,
     },
+    title: {
+      type: Function,
+      required: false,
+    },
   },
   data() {
     return {
-      firstPart: {},
-      secondPart: {},
-      loadingStatus: false,
+      loading: 2,
       references: references,
+      queries: [
+        {
+          data: [],
+          query: `MATCH (p:Prefix {prefix: $prefix})
+            OPTIONAL MATCH (p)<-[o:ORIGINATE]-(a:AS)
+            OPTIONAL MATCH (a)-[:NAME {reference_org:'PeeringDB'}]->(pdbn:Name)
+            OPTIONAL MATCH (a)-[:NAME {reference_org:'BGP.Tools'}]->(btn:Name)
+            OPTIONAL MATCH (a)-[:NAME {reference_org:'RIPE NCC'}]->(ripen:Name)
+            OPTIONAL MATCH(p)-[deleg:COUNTRY {reference_name: 'nro.delegated_stats'}]->(c:Country)
+            OPTIONAL MATCH (p)-[:CATEGORIZED]->(t:Tag)
+            RETURN p.prefix AS prefix, head(collect(DISTINCT(o.descr))) AS descr, collect(DISTINCT([toString(a.asn), COALESCE(pdbn.name, btn.name, ripen.name)])) AS asn, c.name AS country, collect(DISTINCT(t.label)) AS tags, deleg.registry AS rir, c.country_code AS cc`
+        },
+        {
+          data: [],
+          query: `MATCH (p:Prefix {prefix: $prefix})<-[:PART_OF]-(:IP)<-[:RESOLVES_TO]-(d:DomainName)
+            OPTIONAL MATCH (d)-[ra:RANK]->(:Ranking {name: 'Tranco top 1M'})
+            RETURN  DISTINCT d.name as domain, ra.rank AS rank ORDER BY rank LIMIT 5 `
+        }
+      ],
     }
   },
   mounted() {
     this.fetchData()
   },
   methods: {
-    async fetchData() {
-      const queries = this.getOverview()
+    fetchData() {
 
-      this.loadingStatus = true
-      let res = await this.$iyp_api.runManyInOneSessionAndReturnAnObject(queries)
-      this.firstPart = res.firstPart[0]
-      this.secondPart = res.secondPart
-      this.loadingStatus = false
-    },
-    getOverview() {
-      const queryOne = `MATCH (p:Prefix {prefix: $prefix})<-[o:ORIGINATE]-(a:AS)
-         OPTIONAL MATCH (a)-[:NAME]->(n:Name)
-         OPTIONAL MATCH(p)-[:COUNTRY]->(c:Country)
-         OPTIONAL MATCH (p)-[:CATEGORIZED]->(t:Tag)
-         RETURN p.prefix AS prefix, head(collect(DISTINCT(o.descr))) AS descr, head(collect(DISTINCT(a.asn))) AS asn, head(collect(DISTINCT(n.name))) AS name, head(collect(DISTINCT(c.country_code))) AS cc, collect(DISTINCT(t.label)) AS tags
-        `
-      const mappingOne = {
-        prefix: 'prefix',
-        description: 'descr',
-        asn: 'asn',
-        name: 'name',
-        cc: 'cc',
-        tags: 'tags',
-      }
+      let params = { prefix: this.getPrefix() }
+      let res = this.$iyp_api.runManyInParallel(this.queries, params)
 
-      const queryTwo = `
-      MATCH (p:Prefix {prefix: $prefix})<-[:PART_OF]-(i:IP)<-[:RESOLVES_TO]-(d:DomainName)
-      OPTIONAL MATCH (d)-[ra:RANK]->(:Ranking {name: 'Tranco top 1M'})
-      RETURN  DISTINCT i.ip AS ip, d.name as domain, ra.rank AS rank ORDER BY rank LIMIT 5
-      `
-      const mappingTwo = {
-        ip: 'ip',
-        domainName: 'domain',
-        rank: 'rank',
-      }
+      res[0].then( results => {
+        this.queries[0].data = results.records
+        if (this.title !== undefined) {
+          this.title('- '+this.queries[0].data[0].get('descr'))
+        }
+        this.loading -= 1
+      })
 
-      const prefix = this.getPrefix()
-
-      return [
-        { cypherQuery: queryOne, params: { prefix: prefix }, mapping: mappingOne, data: 'firstPart' },
-        { cypherQuery: queryTwo, params: { prefix: prefix }, mapping: mappingTwo, data: 'secondPart' },
-      ]
+      res[1].then( results => {
+        this.queries[1].data = results.records
+        this.loading -= 1
+      })
     },
     getPrefix() {
       return `${this.host}/${this.prefixLength}`
     },
-    handleDomainName(name) {
-      return 'https://' + name
-    },
     handleReference(key) {
       let externalLink = ''
-      if (key === 'bgp') {
-        externalLink = `${references.bgp}/${this.host}/${this.prefixLength}`
-      } else if (key === 'bgpTools') {
-        externalLink = `${references.bgpTools}/${this.host}/${this.prefixLength}`
-      } else if (key === 'ripeStat') {
-        externalLink = `${references.ripeStat}/${this.host}/${this.prefixLength}`
+      if (key === 'bgp.he.net') {
+        externalLink = `${references[key]}/${this.host}/${this.prefixLength}`
+      } else if (key === 'bgp.tools') {
+        externalLink = `${references[key]}/${this.host}/${this.prefixLength}`
+      } else if (key === 'stat.ripe.net') {
+        externalLink = `${references[key]}/${this.host}/${this.prefixLength}`
       } else {
         console.log('none')
         return
@@ -159,13 +161,32 @@ export default {
       return externalLink
     },
     handleRoutingFromNetworksToIYP() {
-      console.log('Routing to IYP')
       this.$router.push({
         name: 'iyp_prefix',
         params: { host: this.host, prefix_length: this.prefixLength },
       })
     },
   },
+  watch: {
+    async host(newValue, oldValue) {
+      if(!this.loadingStatus){
+        this.loading = 3
+        this.queries.forEach( query => {
+          query.data = []
+        })
+        this.fetchData()
+      }
+    },
+    async prefixLength(newValue, oldValue) {
+      if(!this.loadingStatus){
+        this.loading = 3
+        this.queries.forEach( query => {
+          query.data = []
+        })
+        this.fetchData()
+      }
+    }
+  }
 }
 </script>
 

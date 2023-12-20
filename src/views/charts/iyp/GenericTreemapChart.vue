@@ -45,18 +45,22 @@ export default {
   methods: {
     renderChart() {
       const formattedData = this.formatChartData(this.localChartData)
+      let textinfo =  this.config.textinfo ? this.config.textinfo : 'label'
+      let hovertemplate = this.config.hovertemplate ? this.config.hovertemplate : '%{label}<br>%{value}<extra></extra>'
+
       let data = [
         {
           type: 'treemap',
+          ids: formattedData[0].ids,
           labels: formattedData[0].labels,
           parents: formattedData[0].parents,
+          values: formattedData[0].values,
+          customdata: formattedData[0].extras,
           branchvalues: 'total',
+          textinfo: textinfo,
+          hovertemplate: hovertemplate
         },
       ]
-
-      if (this.config.key === 'cc' && this.config.values) {
-        data[0].values = formattedData[0].values
-      }
 
       const layout = {
         ...this.chartLayout,
@@ -65,87 +69,119 @@ export default {
       this.actualData = data
       this.actualLayout = layout
 
-      // ReactiveChart component will take care of width and height
-      // To enlarge the chart if length of the data increases
-      // if (formattedData[0].labels.length > 100) {
-      //   layout.width = '1000'
-      //   layout.height = '750'
-      // } else {
-      //   layout.width = '700'
-      // }
     },
     formatChartData(arrayOfObjects) {
       if (!arrayOfObjects || arrayOfObjects.length === 0) {
         return []
       }
 
-      const map = {}
-      let configKey = this.config.key
-      arrayOfObjects.forEach(item => {
-        let key = ''
-        if (configKey == 'cc') {
-          key = item.cc
-        } else if (configKey == 'domainName') {
-          key = item.domainName.split('.').pop()
+      let handler = {
+        get: function(target, name) {
+          if(target.hasOwnProperty(name)) return target[name]
+          // check if it is an object returned by cypher
+          if(target.keys && target.keys.includes(name)) return target.get(name)
+          return '';
         }
+      };
 
-        if (!map[key]) {
-          map[key] = [{ child: configKey === 'cc' ? item.asn.low : item.domainName, value: configKey === 'cc' ? item.hegemonyScore : '' }]
-        } else {
-          map[key].push({ child: configKey === 'cc' ? item.asn.low : item.domainName, value: configKey === 'cc' ? item.hegemonyScore : '' })
-        }
-      })
+      let emptyObj = new Proxy({}, handler);
 
+      let ids = []
       let labels = []
       let parents = []
       let values = []
+      let extras = []
+      let parent_extra = {}
+      let total = {child: 0, value: 0}
+      let leafs = {}
+      let ex_leaf_item = ''
 
       let root = this.config.root
+      ids.push(root)
       labels.push(root)
       parents.push('')
+      extras.push( emptyObj )
+      values.push(0)
+      parent_extra[root] = {'__sum_value': 0, '__sum_child': 0}
 
-      let keys = Object.keys(map)
+      const map = {}
 
-      // calculating root sum
-      if (configKey == 'cc' && this.config.values) {
-        let rootSum = 0
-        keys.forEach(key => {
-          let sum = 0
-          map[key].forEach(item => {
-            sum += item.value
-          })
-          rootSum += sum
-        })
-        values.push(rootSum)
-      }
+      //let configKey = this.config.key
+      let keys = this.config.keys
+      let lastKey = keys[keys.length-1]
+      arrayOfObjects.forEach(item => {
 
-      // calculating sum for one level deeper
-      keys.forEach(key => {
-        labels.push(key)
-        parents.push(root)
+        let currentID = root
+        let parentID =  ''
+        let item_value = this.config.keyValue ? Number(item.get(this.config.keyValue)) : 1
 
-        if (configKey == 'cc' && this.config.values) {
-          let sum = 0
-          map[key].forEach(item => {
-            sum += item.value
-          })
+        keys.forEach( key => {
+          parentID = currentID
+          currentID += item.get(key)
 
-          values.push(sum)
-        }
-      })
+          // First time we see this key, add to the treemap
+          if (!map[currentID]) {
+            map[currentID] = true
 
-      // Generating labels, parents, and values
-      for (const [key, value] of Object.entries(map)) {
-        value.forEach(item => {
-          labels.push(item.child)
-          parents.push(key)
-          if (configKey == 'cc' && this.config.values) {
-            values.push(item.value)
+            ids.push(currentID)
+            labels.push(item.get(key))
+            parents.push(parentID)
+
+            if(key==lastKey){
+              extras.push(new Proxy(item, handler))
+              values.push(item_value)
+              ex_leaf_item = item
+
+              // Maintain stats to calculate percentage per nodes
+              leafs[item.get(key)] = true
+              total.child += 1
+              total.value += item_value
+              item['__sum_child'] = 1
+              item['__sum_value'] = item_value
+
+            }
+            else{
+              // Maintain stats to calculate percentage per nodes
+              parent_extra[currentID] = {'__sum_value': item_value, '__sum_child': 1}
+              extras.push(new Proxy(parent_extra[currentID], handler) )
+              values.push(0)
+            }
+          }
+          else{
+            if(key!=lastKey){
+              // Maintain stats to calculate percentage per nodes
+              parent_extra[currentID].__sum_value += item_value
+              parent_extra[currentID].__sum_child += 1
+            }
           }
         })
+      })
+
+      // Update the total for all customdata and compute percentages
+      for(let i=0; i < extras.length; i++){
+        let item = extras[i]
+
+        values[i] = item['__sum_value']
+
+        item['__percent'] = 100*item['__sum_value']/total.value
+        item['__total_child'] = total.child
+        item['__total_value'] = total.value
+
+        values[0] = item['__total_value']
+
+        if( !leafs[labels[i]]  & labels[i]!=root ){
+          if(this.config.show_percent){
+            labels[i] = labels[i]+' ('+item['__percent'].toFixed(1)+'%)'
+          }
+
+          // Default customdata to empty strings to avoid displaying hovertemplate syntax
+          Object.getOwnPropertyNames(ex_leaf_item).forEach( prop => {
+            if( !item[prop]) item[prop] = '';
+          })
+        }
       }
 
-      return [{ labels, parents, values }]
+      return [{ ids, labels, parents, values, extras }]
     },
   },
   watch: {
